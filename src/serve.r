@@ -43,7 +43,7 @@ RATE_LIMIT_MAX_REQUESTS <- as.integer(Sys.getenv("RATE_LIMIT_MAX_REQUESTS", "100
 
 # Response cache
 cache_store <- new.env()
-CACHE_TTL <- 3600 # 1 hour in seconds
+CACHE_TTL <- Inf # Cache until redeploy
 
 #' Generate cache key from request parameters
 #'
