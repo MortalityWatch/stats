@@ -284,6 +284,41 @@ test_that("bs/be handles interspersed NAs in post-baseline period", {
   expect_true(is.na(result$zscore[12]))
 })
 
+test_that("bs/be handles interspersed NAs within baseline period", {
+  # 24 months of data (2 full cycles needed so seasonal model isn't perfectly determined)
+  # NA at position 4 (inside baseline) tests interpolation preserves tsibble regularity
+  y <- c(100, 110, 105, NA, 112, 107, 104, 114, 109, 106, 116, 111,
+         102, 112, 107, 104, 114, 109, 106, 116, 111, 108, 118, 113)
+  h <- 3
+  s <- 3 # Monthly seasonality
+  t <- FALSE
+
+  # Should work with mean (TSLM + season()) — previously failed with filter(!is.na())
+  result_mean <- handleForecast(y, h, "mean", s, t, bs = 1, be = 24)
+  check_forecast_result(result_mean, length(y) + h)
+
+  # Baseline z-score at NA position should be NA (no observed value to compare)
+  expect_true(is.na(result_mean$zscore[4]))
+  # Non-NA baseline positions should have z-scores
+  expect_true(!is.na(result_mean$zscore[1]))
+  expect_true(!is.na(result_mean$zscore[5]))
+
+  # Should also work with other model types
+  result_med <- handleForecast(y, h, "median", s, t, bs = 1, be = 24)
+  check_forecast_result(result_med, length(y) + h)
+
+  result_exp <- handleForecast(y, h, "exp", s, t, bs = 1, be = 24)
+  check_forecast_result(result_exp, length(y) + h)
+
+  # Non-seasonal (s=1) with interspersed NA in baseline should also work
+  y2 <- c(100, 105, NA, 108, 112, 115, 120)
+  result_ns <- handleForecast(y2, 2, "mean", 1, FALSE, bs = 1, be = 7)
+  check_forecast_result(result_ns, length(y2) + 2)
+  expect_true(is.na(result_ns$zscore[3]))
+  expect_true(!is.na(result_ns$zscore[2]))
+  expect_true(!is.na(result_ns$zscore[4]))
+})
+
 # ============================================================================
 # Pre-baseline z-score tests (new bs/be feature)
 # ============================================================================
