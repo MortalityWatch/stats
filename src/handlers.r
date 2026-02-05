@@ -240,10 +240,19 @@ handleForecast <- function(y, h, m, s, t, bs = NULL, be = NULL, xs = NULL) {
     df_baseline$year <- (start_index + (actual_bs - 1)) + 0:(length(y_baseline_clean) - 1)
   }
 
-  # Convert to tsibble and remove any remaining interspersed NAs
+  # Convert to tsibble (keep NAs to preserve regular time index for seasonal models)
   df_baseline <- df_baseline |>
-    as_tsibble(index = year) |>
-    filter(!is.na(asmr))
+    as_tsibble(index = year)
+
+  # Interpolate interspersed NAs for model fitting (ETS requires no NAs,
+  # and filtering NAs breaks tsibble regularity needed by season())
+  if (any(is.na(df_baseline$asmr))) {
+    idx <- seq_len(nrow(df_baseline))
+    non_na <- !is.na(df_baseline$asmr)
+    if (sum(non_na) >= 2) {
+      df_baseline$asmr <- approx(idx[non_na], df_baseline$asmr[non_na], idx, rule = 2)$y
+    }
+  }
 
   # Fit model based on method
   if (m == "naive") {
@@ -359,7 +368,7 @@ handleForecast <- function(y, h, m, s, t, bs = NULL, be = NULL, xs = NULL) {
   # Calculate z-scores using helper function
   # Use actual_bs for z-score calculation when there are leading NAs
   effective_bs <- if (bs == 1 && leading_NA > 0) actual_bs else bs
-  baseline_residuals <- y_baseline_clean[!is.na(y_baseline_clean)] - bl$.mean
+  baseline_residuals <- y_baseline_clean - bl$.mean
   zscores <- calculate_zscores(
     y_full = y_full,
     bs = effective_bs,
@@ -636,10 +645,18 @@ handleASD <- function(age_groups, h, m, t, bs = NULL, be = NULL) {
       rates[bs:be]
     }
 
-    # Create baseline tsibble
+    # Create baseline tsibble (keep NAs to preserve regular time index)
     df_baseline <- tibble(year = seq.int(actual_bs, be), rate = rates_baseline_clean) |>
-      as_tsibble(index = year) |>
-      filter(!is.na(rate))
+      as_tsibble(index = year)
+
+    # Interpolate interspersed NAs for model fitting
+    if (any(is.na(df_baseline$rate))) {
+      idx <- seq_len(nrow(df_baseline))
+      non_na <- !is.na(df_baseline$rate)
+      if (sum(non_na) >= 2) {
+        df_baseline$rate <- approx(idx[non_na], df_baseline$rate[non_na], idx, rule = 2)$y
+      }
+    }
 
     # Fit model based on method
     if (m == "naive") {
