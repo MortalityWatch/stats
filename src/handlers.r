@@ -138,8 +138,10 @@ calculate_zscores <- function(y_full, bs, be, baseline_residuals,
 #' @param be Baseline end index (1-indexed)
 #' @param period Seasonal period (e.g., 52 weekly, 12 monthly, 4 quarterly)
 #' @param result_length Total length of output z-score vector (includes forecast)
+#' @param s Seasonality code (2=quarterly, 3=monthly, 4=weekly)
+#' @param xs Optional start index string (e.g., 2006W01)
 #' @return Vector of z-scores (forecast positions are NA)
-calculate_stl_residual_zscores <- function(y_full, bs, be, period, result_length) {
+calculate_stl_residual_zscores <- function(y_full, bs, be, period, result_length, s = NULL, xs = NULL) {
   zscores <- rep(NA_real_, result_length)
 
   n <- length(y_full)
@@ -206,9 +208,38 @@ calculate_stl_residual_zscores <- function(y_full, bs, be, period, result_length
     return(NULL)
   }
 
-  # Build periodic seasonal profile from baseline STL seasonal component
+  # Build phase vector for full series. Prefer calendar-aware phases when xs is provided.
+  get_phase_vector <- function(n, period, s, xs) {
+    if (!is.null(xs) && !is.null(s)) {
+      start_idx <- parse_xs(xs, s)
+      if (!is.null(start_idx)) {
+        idx <- start_idx + seq.int(0, n - 1)
+        if (s == 4) {
+          # ISO week number, folding week 53 into week 52 bucket for periodic(52) seasonality
+          wk <- suppressWarnings(as.integer(format(as.Date(idx), "%V")))
+          wk <- pmin(wk, 52L)
+          return(((wk - 1) %% period) + 1)
+        }
+        if (s == 3) {
+          mo <- suppressWarnings(as.integer(format(as.Date(idx), "%m")))
+          return(((mo - 1) %% period) + 1)
+        }
+        if (s == 2) {
+          mo <- suppressWarnings(as.integer(format(as.Date(idx), "%m")))
+          q <- ((mo - 1) %/% 3) + 1
+          return(((q - 1) %% period) + 1)
+        }
+      }
+    }
+    # Fallback to positional phase
+    ((seq_len(n) - 1) %% period) + 1
+  }
+
+  phase_all <- get_phase_vector(n, period, s, xs)
+
+  # Build periodic seasonal profile from baseline STL seasonal component.
   baseline_positions <- seq_along(seasonal_baseline)
-  phase_baseline <- ((baseline_positions - 1) %% period) + 1
+  phase_baseline <- phase_all[baseline_slice]
   seasonal_profile <- tapply(seasonal_baseline, phase_baseline, mean, na.rm = TRUE)
 
   # Ensure full period profile exists
@@ -222,7 +253,7 @@ calculate_stl_residual_zscores <- function(y_full, bs, be, period, result_length
 
   observed_full_idx <- which(!is.na(y_full))
   rel_to_baseline <- observed_full_idx - bs + 1
-  phase_full <- ((rel_to_baseline - 1) %% period) + 1
+  phase_full <- phase_all[observed_full_idx]
   seasonal_full <- seasonal_profile[phase_full]
   trend_full <- stats::predict(trend_fit, newdata = data.frame(baseline_positions = rel_to_baseline))
 
@@ -493,7 +524,9 @@ handleForecast <- function(y, h, m, s, t, bs = NULL, be = NULL, xs = NULL) {
       bs = effective_bs,
       be = be,
       period = period,
-      result_length = length(result$y)
+      result_length = length(result$y),
+      s = s,
+      xs = xs
     )
     if (!is.null(stl_zscores)) {
       zscores <- stl_zscores

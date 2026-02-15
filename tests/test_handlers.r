@@ -220,6 +220,27 @@ test_that("Periodic series use STL-residual z-scores", {
   expect_true(abs(observed_z[130]) > 2)
 })
 
+test_that("Periodic STL z-scores stay phase-aligned when baseline starts mid-cycle", {
+  n <- 170
+  i <- seq_len(n)
+  y <- 100 + 8 * sin(2 * pi * i / 52)
+
+  # Baseline starts at an arbitrary mid-cycle index
+  result <- handleForecast(
+    y = y,
+    h = 0,
+    m = "lin_reg",
+    s = 4,
+    t = TRUE,
+    bs = 33,
+    be = 130
+  )
+
+  baseline_z <- result$zscore[33:130]
+  expect_true(mean(abs(baseline_z), na.rm = TRUE) < 0.6)
+  expect_true(max(abs(baseline_z), na.rm = TRUE) < 5.5)
+})
+
 test_that("Periodic STL z-scores do not leak sustained post-baseline anomalies", {
   n <- 190
   i <- seq_len(n)
