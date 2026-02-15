@@ -209,15 +209,43 @@ test_that("Periodic series use STL-residual z-scores", {
   baseline_z <- observed_z[20:130]
 
   # baseline-period z-scores should be roughly centered around zero
-  expect_true(abs(mean(baseline_z, na.rm = TRUE)) < 0.4)
+  expect_true(abs(mean(baseline_z, na.rm = TRUE)) < 0.15)
 
   # annual seasonality should be largely removed in z-scores
   season_ref <- sin(2 * pi * (20:130) / 52)
   seasonal_corr <- suppressWarnings(cor(baseline_z, season_ref, use = "complete.obs"))
-  expect_true(abs(seasonal_corr) < 0.25)
+  expect_true(abs(seasonal_corr) < 0.1)
 
   # shock should remain a clear anomaly
   expect_true(abs(observed_z[130]) > 2)
+})
+
+test_that("Periodic STL z-scores do not leak sustained post-baseline anomalies", {
+  n <- 190
+  i <- seq_len(n)
+  seasonal <- 7 * sin(2 * pi * i / 52)
+  trend <- 0.12 * i
+
+  y <- 100 + trend + seasonal
+  # Sustained post-baseline elevation (should remain loud in z-scores)
+  y[131:170] <- y[131:170] + 18
+
+  result <- handleForecast(
+    y = y,
+    h = 2,
+    m = "lin_reg",
+    s = 4, # weekly
+    t = TRUE,
+    bs = 20,
+    be = 130
+  )
+
+  observed_z <- result$zscore[1:n]
+  sustained_window <- observed_z[131:170]
+
+  # Sustained anomaly should not be absorbed away by decomposition/trend leakage
+  expect_true(mean(sustained_window, na.rm = TRUE) > 2)
+  expect_true(sum(abs(sustained_window) > 2, na.rm = TRUE) >= 25)
 })
 
 # ============================================================================
