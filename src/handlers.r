@@ -129,9 +129,10 @@ calculate_zscores <- function(y_full, bs, be, baseline_residuals,
 
 #' Calculate STL residual z-scores for periodic series
 #'
-#' Uses STL decomposition with periodic seasonal component and trend window
-#' ~3 full periods. Missing observed values are linearly interpolated for
-#' decomposition only; z-scores are emitted only for originally non-NA points.
+#' Uses full-series STL for robust seasonal extraction, then fits a linear
+#' trend on the baseline portion only and extrapolates it. Z-scores measure
+#' deviation from (baseline_trend + seasonal), scaled by baseline remainder SD.
+#' This ensures changing the baseline changes the z-score pattern, not just scale.
 #'
 #' @param y_full Full observed data vector (no forecast extension)
 #' @param bs Baseline start index (1-indexed)
@@ -189,7 +190,8 @@ calculate_stl_residual_zscores <- function(y_full, bs, be, period, result_length
     return(NULL)
   }
 
-  remainder <- as.numeric(stl_fit$time.series[, "remainder"])
+  seasonal <- as.numeric(stl_fit$time.series[, "seasonal"])
+  trend_full <- as.numeric(stl_fit$time.series[, "trend"])
 
   baseline_idx <- seq.int(bs, be)
   baseline_idx <- baseline_idx[baseline_idx >= 1 & baseline_idx <= n]
@@ -197,6 +199,15 @@ calculate_stl_residual_zscores <- function(y_full, bs, be, period, result_length
   if (length(baseline_idx) < 3) {
     return(NULL)
   }
+
+  # Fit linear trend on baseline portion of STL trend, extrapolate to full series
+  baseline_trend <- trend_full[baseline_idx]
+  trend_fit <- stats::lm(baseline_trend ~ baseline_idx)
+  all_positions <- seq_len(n)
+  extrapolated_trend <- stats::predict(trend_fit, newdata = data.frame(baseline_idx = all_positions))
+
+  # Remainder = observed - seasonal - baseline_extrapolated_trend
+  remainder <- y_interp - seasonal - extrapolated_trend
 
   baseline_sd <- sd(remainder[baseline_idx], na.rm = TRUE)
   if (is.na(baseline_sd) || baseline_sd <= 0) {
