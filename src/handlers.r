@@ -138,8 +138,10 @@ calculate_zscores <- function(y_full, bs, be, baseline_residuals,
 #' @param be Baseline end index (1-indexed)
 #' @param period Seasonal period (e.g., 52 weekly, 12 monthly, 4 quarterly)
 #' @param result_length Total length of output z-score vector (includes forecast)
+#' @param s Seasonality code (2=quarterly, 3=monthly, 4=weekly)
+#' @param xs Optional start index string (e.g., 2006W01)
 #' @return Vector of z-scores (forecast positions are NA)
-calculate_stl_residual_zscores <- function(y_full, bs, be, period, result_length) {
+calculate_stl_residual_zscores <- function(y_full, bs, be, period, result_length, s = NULL, xs = NULL) {
   zscores <- rep(NA_real_, result_length)
 
   n <- length(y_full)
@@ -153,35 +155,26 @@ calculate_stl_residual_zscores <- function(y_full, bs, be, period, result_length
     return(NULL)
   }
 
-  baseline_slice <- bs:be
-  observed_baseline_idx <- baseline_slice[!is.na(y_full[baseline_slice])]
-  if (length(observed_baseline_idx) < max(6, period)) {
+  observed_idx <- which(!is.na(y_full))
+  if (length(observed_idx) < 3) {
     return(NULL)
   }
 
-  # Baseline-only STL (prevents post-baseline anomaly leakage into trend/seasonal)
-  y_baseline <- y_full[baseline_slice]
-  na_mask_baseline <- is.na(y_baseline)
-  if (all(na_mask_baseline)) {
-    return(NULL)
-  }
-
-  if (any(na_mask_baseline)) {
-    x_base <- seq_along(y_baseline)
-    y_baseline[na_mask_baseline] <- approx(
-      x = x_base[!na_mask_baseline],
-      y = y_baseline[!na_mask_baseline],
-      xout = x_base[na_mask_baseline],
+  # Interpolate missing values for decomposition only
+  na_mask <- is.na(y_full)
+  y_interp <- y_full
+  if (any(na_mask)) {
+    x <- seq_along(y_full)
+    y_interp[na_mask] <- approx(
+      x = x[!na_mask],
+      y = y_full[!na_mask],
+      xout = x[na_mask],
       method = "linear",
       rule = 2
     )$y
   }
 
-  if (length(y_baseline) < period * 2) {
-    return(NULL)
-  }
-
-  max_trend_window <- length(y_baseline) - 1
+  max_trend_window <- n - 1
   trend_window <- min(period * 3, max_trend_window)
   if (trend_window < 3) {
     return(NULL)
@@ -189,45 +182,28 @@ calculate_stl_residual_zscores <- function(y_full, bs, be, period, result_length
   if (trend_window %% 2 == 0) trend_window <- trend_window - 1
 
   stl_fit <- tryCatch(
-    stats::stl(stats::ts(y_baseline, frequency = period), s.window = "periodic", t.window = trend_window),
+    stats::stl(stats::ts(y_interp, frequency = period), s.window = "periodic", t.window = trend_window),
     error = function(e) NULL
   )
   if (is.null(stl_fit)) {
     return(NULL)
   }
 
-  seasonal_baseline <- as.numeric(stl_fit$time.series[, "seasonal"])
-  trend_baseline <- as.numeric(stl_fit$time.series[, "trend"])
-  remainder_baseline <- as.numeric(stl_fit$time.series[, "remainder"])
+  remainder <- as.numeric(stl_fit$time.series[, "remainder"])
 
-  observed_baseline_local <- observed_baseline_idx - bs + 1
-  baseline_sd <- sd(remainder_baseline[observed_baseline_local], na.rm = TRUE)
+  baseline_idx <- seq.int(bs, be)
+  baseline_idx <- baseline_idx[baseline_idx >= 1 & baseline_idx <= n]
+  baseline_idx <- baseline_idx[!is.na(y_full[baseline_idx])]
+  if (length(baseline_idx) < 3) {
+    return(NULL)
+  }
+
+  baseline_sd <- sd(remainder[baseline_idx], na.rm = TRUE)
   if (is.na(baseline_sd) || baseline_sd <= 0) {
     return(NULL)
   }
 
-  # Build periodic seasonal profile from baseline STL seasonal component
-  baseline_positions <- seq_along(seasonal_baseline)
-  phase_baseline <- ((baseline_positions - 1) %% period) + 1
-  seasonal_profile <- tapply(seasonal_baseline, phase_baseline, mean, na.rm = TRUE)
-
-  # Ensure full period profile exists
-  profile <- rep(0, period)
-  profile_idx <- as.integer(names(seasonal_profile))
-  profile[profile_idx] <- seasonal_profile
-  seasonal_profile <- profile - mean(profile, na.rm = TRUE)
-
-  # Extrapolate trend from baseline trend only (avoid post-baseline leakage)
-  trend_fit <- stats::lm(trend_baseline ~ baseline_positions)
-
-  observed_full_idx <- which(!is.na(y_full))
-  rel_to_baseline <- observed_full_idx - bs + 1
-  phase_full <- ((rel_to_baseline - 1) %% period) + 1
-  seasonal_full <- seasonal_profile[phase_full]
-  trend_full <- stats::predict(trend_fit, newdata = data.frame(baseline_positions = rel_to_baseline))
-
-  remainder_full <- y_full[observed_full_idx] - trend_full - seasonal_full
-  zscores[observed_full_idx] <- round(remainder_full / baseline_sd, 3)
+  zscores[observed_idx] <- round(remainder[observed_idx] / baseline_sd, 3)
   zscores
 }
 
@@ -493,7 +469,9 @@ handleForecast <- function(y, h, m, s, t, bs = NULL, be = NULL, xs = NULL) {
       bs = effective_bs,
       be = be,
       period = period,
-      result_length = length(result$y)
+      result_length = length(result$y),
+      s = s,
+      xs = xs
     )
     if (!is.null(stl_zscores)) {
       zscores <- stl_zscores
