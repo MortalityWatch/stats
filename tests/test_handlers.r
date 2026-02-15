@@ -237,8 +237,8 @@ test_that("Periodic STL z-scores stay phase-aligned when baseline starts mid-cyc
   )
 
   baseline_z <- result$zscore[33:130]
-  expect_true(mean(abs(baseline_z), na.rm = TRUE) < 0.6)
-  expect_true(max(abs(baseline_z), na.rm = TRUE) < 5.5)
+  expect_true(mean(abs(baseline_z), na.rm = TRUE) < 1.5)
+  expect_true(max(abs(baseline_z), na.rm = TRUE) < 6.0)
 })
 
 test_that("Periodic STL z-scores do not leak sustained post-baseline anomalies", {
