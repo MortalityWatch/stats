@@ -345,37 +345,41 @@ handleForecast <- function(y, h, m, s, t, bs = NULL, be = NULL, xs = NULL) {
     }
   }
 
+  # Check if baseline is long enough for seasonal modelling
+  period <- switch(as.character(s), `2` = 4L, `3` = 12L, `4` = 52L, 0L)
+  use_season <- s > 1 && nrow(df_baseline) > period
+
   # Fit model based on method
   if (m == "naive") {
     mdl <- df_baseline |> model(NAIVE(asmr))
   } else if (m == "mean") {
-    if (s > 1) {
+    if (use_season) {
       mdl <- df_baseline |> model(TSLM(asmr ~ season()))
     } else {
       mdl <- df_baseline |> model(TSLM(asmr))
     }
   } else if (m == "median") {
-    if (s > 1) {
+    if (use_season) {
       mdl <- df_baseline |> model(MEDIAN(asmr ~ season()))
     } else {
       mdl <- df_baseline |> model(MEDIAN(asmr))
     }
   } else if (m == "lin_reg") {
     if (t) {
-      if (s > 1) {
+      if (use_season) {
         mdl <- df_baseline |> model(TSLM(asmr ~ trend() + season()))
       } else {
         mdl <- df_baseline |> model(TSLM(asmr ~ trend()))
       }
     } else {
-      if (s > 1) {
+      if (use_season) {
         mdl <- df_baseline |> model(TSLM(asmr ~ season()))
       } else {
         mdl <- df_baseline |> model(TSLM(asmr))
       }
     }
   } else if (m == "exp") {
-    if (s > 1) {
+    if (use_season) {
       mdl <- df_baseline |> model(ETS(asmr ~ error() + trend() + season()))
     } else {
       mdl <- df_baseline |> model(ETS(asmr ~ error("A") + trend("Ad")))
