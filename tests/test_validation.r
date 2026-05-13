@@ -11,12 +11,77 @@ test_that("validate_request accepts valid standard forecast request", {
     h = "5",
     s = "1",
     m = "mean",
-    t = "0"
+    t = "0",
+    zscore_method = "standard"
   )
 
   result <- validate_request(query, "/")
 
   expect_true(result$valid)
+})
+
+test_that("validate_request accepts variance-stabilized z-score params", {
+  query <- list(
+    y = "10,20,30,40,50",
+    h = "2",
+    s = "1",
+    m = "mean",
+    zscore_method = "variance_stabilized",
+    lambda_mode = "manual",
+    lambda = "0.25"
+  )
+
+  result <- validate_request(query, "/")
+
+  expect_true(result$valid)
+})
+
+test_that("validate_request rejects invalid z-score method", {
+  query <- list(
+    y = "10,20,30,40,50",
+    h = "2",
+    s = "1",
+    m = "mean",
+    zscore_method = "weird"
+  )
+
+  result <- validate_request(query, "/")
+
+  expect_false(result$valid)
+  expect_match(result$message, "zscore_method")
+})
+
+test_that("validate_request rejects manual lambda without variance-stabilized z-scores", {
+  query <- list(
+    y = "10,20,30,40,50",
+    h = "2",
+    s = "1",
+    m = "mean",
+    zscore_method = "standard",
+    lambda_mode = "manual",
+    lambda = "0"
+  )
+
+  result <- validate_request(query, "/")
+
+  expect_false(result$valid)
+  expect_match(result$message, "variance_stabilized")
+})
+
+test_that("validate_request rejects missing manual lambda value", {
+  query <- list(
+    y = "10,20,30,40,50",
+    h = "2",
+    s = "1",
+    m = "mean",
+    zscore_method = "variance_stabilized",
+    lambda_mode = "manual"
+  )
+
+  result <- validate_request(query, "/")
+
+  expect_false(result$valid)
+  expect_match(result$message, "lambda")
 })
 
 test_that("validate_request accepts valid cumulative forecast request", {

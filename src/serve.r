@@ -413,6 +413,53 @@ validate_request <- function(query, path) {
     return(list(valid = FALSE, status = 400, message = "Parameter 'h' must be a positive integer between 1 and 1000"))
   }
 
+  zscore_method <- as.character(query$zscore_method %||% "standard")
+  if (!zscore_method %in% c("standard", "variance_stabilized")) {
+    return(list(
+      valid = FALSE,
+      status = 400,
+      message = "Parameter 'zscore_method' must be one of: standard, variance_stabilized"
+    ))
+  }
+
+  lambda_mode <- query$lambda_mode
+  if (!is.null(lambda_mode)) {
+    lambda_mode <- as.character(lambda_mode)
+    if (!lambda_mode %in% c("auto", "manual")) {
+      return(list(
+        valid = FALSE,
+        status = 400,
+        message = "Parameter 'lambda_mode' must be one of: auto, manual"
+      ))
+    }
+  }
+
+  if (!is.null(query$lambda)) {
+    lambda <- suppressWarnings(as.numeric(query$lambda))
+    if (!is.finite(lambda)) {
+      return(list(valid = FALSE, status = 400, message = "Parameter 'lambda' must be numeric"))
+    }
+    if (lambda < -5 || lambda > 5) {
+      return(list(valid = FALSE, status = 400, message = "Parameter 'lambda' must be between -5 and 5"))
+    }
+  }
+
+  if (!is.null(lambda_mode) && lambda_mode == "manual" && zscore_method != "variance_stabilized") {
+    return(list(
+      valid = FALSE,
+      status = 400,
+      message = "Parameter 'lambda_mode=manual' requires 'zscore_method=variance_stabilized'"
+    ))
+  }
+
+  if (zscore_method == "variance_stabilized" && identical(lambda_mode, "manual") && is.null(query$lambda)) {
+    return(list(
+      valid = FALSE,
+      status = 400,
+      message = "Parameter 'lambda' is required when lambda_mode is manual"
+    ))
+  }
+
   # Path-specific validation
   if (path == "/") {
     # Validate 's' (seasonality)
@@ -705,7 +752,10 @@ app$on("request", function(server, request, ...) {
       m <- merged_params$m
       s <- as.integer(merged_params$s)
       xs <- merged_params$xs
-      handleForecast(y, h, m, s, t, bs, be, xs)
+      zscore_method <- as.character(merged_params$zscore_method %||% "standard")
+      lambda_mode <- if (!is.null(merged_params$lambda_mode)) as.character(merged_params$lambda_mode) else NULL
+      lambda <- if (!is.null(merged_params$lambda)) as.numeric(merged_params$lambda) else NULL
+      handleForecast(y, h, m, s, t, bs, be, xs, zscore_method, lambda_mode, lambda)
     } else {
       # /cum endpoint: parse y
       y <- parse_numeric_array(merged_params$y)
