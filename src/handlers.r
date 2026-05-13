@@ -152,7 +152,7 @@ build_fitted_observed_pairs <- function(y_full, bs, be, leading_NA, bl_mean, mdl
   fitted
 }
 
-calculate_variance_stabilized_zscores <- function(y_full, fitted_observed, bs, be, result_length, lambda, shift) {
+calc_var_stabilized_zscores <- function(y_full, fitted_observed, bs, be, result_length, lambda, shift) {
   zscores <- rep(NA_real_, result_length)
 
   observed_idx <- which(!is.na(y_full) & !is.na(fitted_observed))
@@ -665,7 +665,7 @@ handleForecast <- function(
       df_baseline = df_baseline
     )
     shift <- compute_box_cox_shift(c(y_full, fitted_observed))
-    variance_stabilized_zscores <- calculate_variance_stabilized_zscores(
+    variance_stabilized_zscores <- calc_var_stabilized_zscores(
       y_full = y_full,
       fitted_observed = fitted_observed,
       bs = effective_bs,
