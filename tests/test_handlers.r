@@ -15,6 +15,9 @@ check_forecast_result <- function(result, expected_length) {
   expect_true("lower" %in% names(result))
   expect_true("upper" %in% names(result))
   expect_true("zscore" %in% names(result))
+  expect_true("zscore_method" %in% names(result))
+  expect_true("lambda_mode" %in% names(result))
+  expect_true("lambda" %in% names(result))
   expect_equal(length(result$y), expected_length)
   expect_equal(length(result$lower), expected_length)
   expect_equal(length(result$upper), expected_length)
@@ -39,6 +42,9 @@ test_that("handleForecast with mean method works", {
   # Mean forecast should be constant
   forecast_values <- tail(result$y, h)
   expect_true(all(forecast_values == forecast_values[1]))
+  expect_equal(result$zscore_method, "standard")
+  expect_true(is.na(result$lambda_mode))
+  expect_true(is.na(result$lambda))
 })
 
 test_that("handleForecast with linear regression works", {
@@ -168,6 +174,50 @@ test_that("Z-scores are calculated correctly for mean method", {
   # Z-scores for forecast period should be NA (no observed data)
   forecast_zscores <- tail(result$zscore, h)
   expect_true(all(is.na(forecast_zscores)))
+})
+
+test_that("Variance-stabilized z-scores return lambda metadata", {
+  y <- c(100, 102, 98, 101, 99, 130, 150, 140, 135, 132)
+
+  result <- handleForecast(
+    y = y,
+    h = 2,
+    m = "mean",
+    s = 1,
+    t = FALSE,
+    bs = 2,
+    be = 6,
+    zscore_method = "variance_stabilized",
+    lambda_mode = "auto"
+  )
+
+  check_forecast_result(result, length(y) + 2)
+  expect_equal(result$zscore_method, "variance_stabilized")
+  expect_equal(result$lambda_mode, "auto")
+  expect_true(is.numeric(result$lambda))
+  expect_false(any(is.na(result$zscore[1:length(y)])))
+  expect_true(all(is.na(tail(result$zscore, 2))))
+})
+
+test_that("Variance-stabilized z-scores honor manual lambda", {
+  y <- c(10, 12, 11, 13, 12, 14, 20, 18)
+
+  result <- handleForecast(
+    y = y,
+    h = 1,
+    m = "mean",
+    s = 1,
+    t = FALSE,
+    bs = 1,
+    be = 6,
+    zscore_method = "variance_stabilized",
+    lambda_mode = "manual",
+    lambda = 0
+  )
+
+  expect_equal(result$zscore_method, "variance_stabilized")
+  expect_equal(result$lambda_mode, "manual")
+  expect_equal(result$lambda, 0)
 })
 
 test_that("Z-scores have mean ~0 and sd ~1 for observed data", {

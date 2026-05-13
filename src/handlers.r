@@ -38,6 +38,149 @@ if (!file.exists(median_model_path)) {
 
 source(median_model_path)
 
+box_cox_transform <- function(x, lambda) {
+  if (is.na(lambda)) {
+    stop("lambda must be a finite number")
+  }
+  if (abs(lambda) < 1e-8) {
+    return(log(x))
+  }
+  (x^lambda - 1) / lambda
+}
+
+compute_box_cox_shift <- function(values) {
+  finite_values <- values[is.finite(values)]
+  if (length(finite_values) == 0) {
+    return(0)
+  }
+
+  min_value <- min(finite_values)
+  if (min_value > 0) {
+    return(0)
+  }
+
+  1 - min_value
+}
+
+guerrero_objective <- function(lambda, values, period) {
+  clean_values <- values[is.finite(values)]
+  if (length(clean_values) < 4) {
+    return(Inf)
+  }
+
+  period <- max(2L, min(as.integer(period), length(clean_values)))
+  n_blocks <- floor(length(clean_values) / period)
+  if (n_blocks < 2) {
+    return(Inf)
+  }
+
+  trimmed <- clean_values[seq_len(n_blocks * period)]
+  blocks <- split(trimmed, rep(seq_len(n_blocks), each = period))
+  block_means <- vapply(blocks, mean, numeric(1))
+  block_sds <- vapply(blocks, stats::sd, numeric(1))
+
+  if (any(!is.finite(block_means)) || any(!is.finite(block_sds)) || any(block_means <= 0)) {
+    return(Inf)
+  }
+
+  adjusted <- block_sds / (block_means^(1 - lambda))
+  adjusted_mean <- mean(adjusted)
+  if (!is.finite(adjusted_mean) || adjusted_mean <= 0) {
+    return(Inf)
+  }
+
+  stats::sd(adjusted) / adjusted_mean
+}
+
+estimate_guerrero_lambda <- function(values, period_hint = NULL) {
+  clean_values <- values[is.finite(values)]
+  if (length(clean_values) < 4) {
+    return(0)
+  }
+
+  if (is.null(period_hint) || !is.finite(period_hint) || period_hint < 2) {
+    period_hint <- min(4L, max(2L, floor(length(clean_values) / 2)))
+  }
+  period_hint <- min(as.integer(period_hint), length(clean_values))
+
+  opt <- optimize(
+    f = guerrero_objective,
+    interval = c(-2, 2),
+    values = clean_values,
+    period = period_hint
+  )
+
+  round(opt$minimum, 6)
+}
+
+build_fitted_observed_pairs <- function(y_full, bs, be, leading_NA, bl_mean, mdl, df_baseline) {
+  fitted <- rep(NA_real_, length(y_full))
+
+  n_pre_baseline <- if (bs == 1 && leading_NA > 0) 0 else (bs - 1)
+  if (n_pre_baseline > 0) {
+    first_baseline_idx <- df_baseline$year[1]
+    if (inherits(first_baseline_idx, "yearquarter")) {
+      pre_indices <- first_baseline_idx - n_pre_baseline:1
+    } else if (inherits(first_baseline_idx, "yearmonth")) {
+      pre_indices <- first_baseline_idx - n_pre_baseline:1
+    } else if (inherits(first_baseline_idx, "yearweek")) {
+      pre_indices <- first_baseline_idx - n_pre_baseline:1
+    } else {
+      pre_indices <- (first_baseline_idx - n_pre_baseline):(first_baseline_idx - 1)
+    }
+
+    pre_df <- tibble(year = pre_indices, asmr = y_full[1:n_pre_baseline]) |>
+      as_tsibble(index = year)
+    fc_pre <- mdl |> forecast(new_data = pre_df)
+    fitted[seq_len(n_pre_baseline)] <- as_tibble(fc_pre) |> pull(.mean)
+  }
+
+  baseline_start <- if (bs == 1 && leading_NA > 0) leading_NA + 1 else bs
+  baseline_end <- baseline_start + length(bl_mean) - 1
+  fitted[baseline_start:baseline_end] <- bl_mean
+
+  if (be < length(y_full)) {
+    post_data <- y_full[(be + 1):length(y_full)]
+    post_non_na_idx <- which(!is.na(post_data))
+    if (length(post_non_na_idx) > 0) {
+      fc_post <- mdl |> forecast(h = length(post_non_na_idx))
+      post_mean <- as_tibble(fc_post) |> pull(.mean)
+      fitted[be + post_non_na_idx] <- post_mean
+    }
+  }
+
+  fitted
+}
+
+calculate_variance_stabilized_zscores <- function(y_full, fitted_observed, bs, be, result_length, lambda, shift) {
+  zscores <- rep(NA_real_, result_length)
+
+  observed_idx <- which(!is.na(y_full) & !is.na(fitted_observed))
+  if (length(observed_idx) == 0) {
+    return(zscores)
+  }
+
+  transformed_observed <- box_cox_transform(y_full[observed_idx] + shift, lambda)
+  transformed_fitted <- box_cox_transform(fitted_observed[observed_idx] + shift, lambda)
+  transformed_residuals <- transformed_observed - transformed_fitted
+
+  baseline_idx <- seq.int(bs, be)
+  baseline_idx <- baseline_idx[baseline_idx %in% observed_idx]
+  if (length(baseline_idx) < 3) {
+    return(zscores)
+  }
+
+  baseline_positions <- match(baseline_idx, observed_idx)
+  baseline_residuals <- transformed_residuals[baseline_positions]
+  baseline_sd <- sd(baseline_residuals, na.rm = TRUE)
+  if (is.na(baseline_sd) || baseline_sd <= 0) {
+    return(zscores)
+  }
+
+  zscores[observed_idx] <- round(transformed_residuals / baseline_sd, 3)
+  zscores
+}
+
 #' Calculate z-scores for all periods (pre-baseline, baseline, post-baseline, forecast)
 #'
 #' @param y_full Full dataset including all observed data
@@ -283,7 +426,9 @@ parse_xs <- function(xs, s) {
 #' value differs significantly from what the baseline model would have predicted.
 #'
 #' @return List with y (fitted + forecast), lower, and upper bounds, and zscore
-handleForecast <- function(y, h, m, s, t, bs = NULL, be = NULL, xs = NULL) {
+handleForecast <- function(
+    y, h, m, s, t, bs = NULL, be = NULL, xs = NULL,
+    zscore_method = "standard", lambda_mode = NULL, lambda = NULL) {
   y_full <- y
 
   # Set defaults for baseline start/end if not provided
@@ -493,7 +638,56 @@ handleForecast <- function(y, h, m, s, t, bs = NULL, be = NULL, xs = NULL) {
     }
   }
 
-  list(y = result$y, lower = result$lower, upper = result$upper, zscore = zscores)
+  resolved_lambda_mode <- NA_character_
+  resolved_lambda <- NA_real_
+  if (zscore_method == "variance_stabilized") {
+    period_hint <- switch(as.character(s), `2` = 4L, `3` = 12L, `4` = 52L, NULL)
+    if (is.null(lambda_mode) || identical(lambda_mode, "")) {
+      lambda_mode <- "auto"
+    }
+    resolved_lambda_mode <- lambda_mode
+
+    baseline_clean <- y_baseline_clean[!is.na(y_baseline_clean)]
+    if (lambda_mode == "manual") {
+      resolved_lambda <- as.numeric(lambda)
+    } else {
+      shift_for_lambda <- compute_box_cox_shift(baseline_clean)
+      resolved_lambda <- estimate_guerrero_lambda(baseline_clean + shift_for_lambda, period_hint)
+    }
+
+    fitted_observed <- build_fitted_observed_pairs(
+      y_full = y_full,
+      bs = bs,
+      be = be,
+      leading_NA = leading_NA,
+      bl_mean = bl$.mean,
+      mdl = mdl,
+      df_baseline = df_baseline
+    )
+    shift <- compute_box_cox_shift(c(y_full, fitted_observed))
+    variance_stabilized_zscores <- calculate_variance_stabilized_zscores(
+      y_full = y_full,
+      fitted_observed = fitted_observed,
+      bs = effective_bs,
+      be = be,
+      result_length = length(result$y),
+      lambda = resolved_lambda,
+      shift = shift
+    )
+    if (!all(is.na(variance_stabilized_zscores))) {
+      zscores <- variance_stabilized_zscores
+    }
+  }
+
+  list(
+    y = result$y,
+    lower = result$lower,
+    upper = result$upper,
+    zscore = zscores,
+    zscore_method = zscore_method,
+    lambda_mode = resolved_lambda_mode,
+    lambda = resolved_lambda
+  )
 }
 
 #' Cumulative forecast for single horizon
